@@ -1,0 +1,60 @@
+name: دانلود تورنت و تقسیم به بخش‌های ۹۰MB
+
+on:
+  workflow_dispatch:
+    inputs:
+      torrent_link:
+        description: 'لینک تورنت یا مگنت (magnet:?xt=...)'
+        required: true
+        type: string
+
+permissions:
+  contents: write   # برای ساخت Release
+
+jobs:
+  download-and-split:
+    runs-on: ubuntu-latest
+    steps:
+      - name: بررسی کد
+        uses: actions/checkout@v4
+
+      - name: نصب aria2 (کلاینت تورنت)
+        run: sudo apt-get update && sudo apt-get install -y aria2
+
+      - name: دانلود فایل(ها) از تورنت
+        run: |
+          mkdir -p download
+          cd download
+          # دانلود فقط یک فایل (بدون seeding و محدود به یک کانکشن)
+          aria2c \
+            --bt-metadata-only=false \
+            --bt-save-metadata=false \
+            --seed-time=0 \
+            --max-connection-per-server=1 \
+            --split=1 \
+            "${{ github.event.inputs.torrent_link }}"
+          echo "فایل‌های دانلود شده:"
+          ls -lh
+
+      - name: پیدا کردن بزرگ‌ترین فایل (اگر چند فایل باشد، شاید یک فایل zip شده)
+        id: findfile
+        run: |
+          FILE=$(find download -type f -printf "%s %p\n" | sort -nr | head -1 | cut -d' ' -f2-)
+          echo "file=$FILE" >> $GITHUB_OUTPUT
+          echo "filename=$(basename "$FILE")" >> $GITHUB_OUTPUT
+
+      - name: تقسیم فایل به zip های ۹۰MB
+        run: |
+          python split_to_zips.py \
+            --input "${{ steps.findfile.outputs.file }}" \
+            --output-dir parts \
+            --size-mb 90
+
+      - name: ایجاد Release و آپلود بخش‌ها
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "torrent-parts-${{ github.run_id }}"
+          name: "تورنت - ${{ steps.findfile.outputs.filename }}"
+          files: parts/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
